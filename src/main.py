@@ -6,7 +6,7 @@ import requests_cache
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-from constants import BASE_DIR, MAIN_DOC_URL, PEP_DOC_URL
+from constants import BASE_DIR, MAIN_DOC_URL, PEP_DOC_URL, EXPECTED_STATUS
 from configs import configure_argument_parser, configure_logging
 from utils import get_response, find_tag
 from outputs import control_output
@@ -20,11 +20,11 @@ def whats_new(session):
     soup = BeautifulSoup(response.text, features='lxml')
     main_div = find_tag(soup, 'section', attrs={'id': 'what-s-new-in-python'})
     div_with_ul = find_tag(main_div, 'div', attrs={'class': 'toctree-wrapper'})
-    sections_by_python = div_with_ul.find_all(  # type: ignore
+    sections_by_python = div_with_ul.find_all(
         'li', attrs={'class': 'toctree-l1'}
     )
 
-    results = [('Ссылка на статью', 'Заголовок', 'Редактор, автор')]
+    results = [('Ссылка на статью', 'Заголовок', 'Редактор, Автор')]
     for section in tqdm(sections_by_python):
         version_a_tag = section.find('a')
         version_link = urljoin(whats_new_url, version_a_tag['href'])
@@ -34,9 +34,9 @@ def whats_new(session):
         soup = BeautifulSoup(response.text, 'lxml')
         h1 = find_tag(soup, 'h1')
         dl = find_tag(soup, 'dl')
-        dl_text = dl.text.replace('\n', ' ')  # type: ignore
+        dl_text = dl.text.replace('\n', ' ')
         results.append(
-            (version_link, h1.text, dl_text)  # type: ignore
+            (version_link, h1.text, dl_text)
         )
 
     return results
@@ -49,7 +49,7 @@ def latest_versions(session):
     soup = BeautifulSoup(response.text, 'lxml')
 
     sidebar = find_tag(soup, 'div', {'class': 'sphinxsidebarwrapper'})
-    ul_tags = sidebar.find_all('ul')  # type: ignore
+    ul_tags = sidebar.find_all('ul')
     for ul in ul_tags:
         if 'All versions' in ul.text:
             a_tags = ul.find_all('a')
@@ -78,12 +78,12 @@ def download(session):
     if response is None:
         return
     soup = BeautifulSoup(response.text, 'lxml')
-    main_tag = find_tag(soup, 'section', attrs={'id': 'what-s-new-in-python'})
+    main_tag = find_tag(soup, 'div', {'role': 'main'})
     table_tag = find_tag(main_tag, 'table', {'class': 'docutils'})
-    pdf_a4_tag = find_tag(  # type: ignore
+    pdf_a4_tag = find_tag(
         table_tag, 'a', {'href': re.compile(r'.+pdf-a4\.zip$')})
-    pdf_a4_link = pdf_a4_tag['href']  # type: ignore
-    archive_url = urljoin(downloads_url, pdf_a4_link)  # type: ignore
+    pdf_a4_link = pdf_a4_tag['href']
+    archive_url = urljoin(downloads_url, pdf_a4_link)
     filename = archive_url.split('/')[-1]
     downloads_dir = BASE_DIR / 'downloads'
     downloads_dir.mkdir(exist_ok=True)
@@ -99,8 +99,67 @@ def pep(session):
     response = get_response(session, PEP_DOC_URL)
     if response is None:
         return
-    soup = BeautifulSoup(response, 'xmlx')
-    tag = find_tag(soup, 'tr')
+    soup = BeautifulSoup(response.text, 'lxml')
+    numerical_match = find_tag(
+        soup,
+        'section',
+        {'id': 'numerical-index'}
+    )
+    table_match = find_tag(
+        numerical_match,
+        'tbody'
+    )
+    tr_match = table_match.find_all(
+        'tr'
+    )
+    sum_pep = 0
+    sum_pep_status = {}
+    result = [('Статус', 'Количество')]
+    for _pep in tqdm(tr_match):
+        sum_pep += 1
+
+        first_column_tag = find_tag(
+            _pep,
+            'abbr'
+        )
+        preview_status = first_column_tag.text[1:]
+
+        href_match = find_tag(
+            _pep,
+            'a',
+            attrs={'class': 'pep reference internal'}
+        )['href']
+        pep_link = urljoin(PEP_DOC_URL, href_match)
+        response = get_response(session, pep_link)
+        pep_soup = BeautifulSoup(response.text, 'lxml')
+        pep_summary = find_tag(
+            pep_soup,
+            'dl',
+            attrs={'class': 'rfc2822 field-list simple'}
+        )
+        pep_status = pep_summary.find(
+            string='Status'
+        ).parent.find_next_sibling(
+            'dd'
+        ).string
+
+        if pep_status in sum_pep_status:
+            sum_pep_status[pep_status] += 1
+        else:
+            sum_pep_status[pep_status] = 1
+
+        if pep_status not in EXPECTED_STATUS[preview_status]:
+            message = (
+                f'Несовпадающие статусы:'
+                f'{pep_link}'
+                f'Статус в карточке: {pep_status}'
+                f'Ожидаемые статусы: {EXPECTED_STATUS[preview_status]}'
+            )
+            logging.info(message)
+    for status in sum_pep_status:
+        result.append((status, sum_pep_status[status]))
+    result.append(('Total', sum_pep))
+    return result
 
 
 MODE_TO_FUNCTION = {
@@ -108,18 +167,6 @@ MODE_TO_FUNCTION = {
     'latest-versions': latest_versions,
     'download': download,
     'pep': pep,
-}
-
-
-EXPECTED_STATUS = {
-    'A': ('Active', 'Accepted'),
-    'D': ('Deferred',),
-    'F': ('Final',),
-    'P': ('Provisional',),
-    'R': ('Rejected',),
-    'S': ('Superseded',),
-    'W': ('Withdrawn',),
-    '': ('Draft', 'Active'),
 }
 
 

@@ -25,7 +25,7 @@ def configure_argument_parser(available_modes):
         '-o',
         '--output',
         choices=('pretty', 'file'),
-        help='Вывод в формате PrettyTable'
+        help='Дополнительные способы вывода данных'
     )
     return parser
 
