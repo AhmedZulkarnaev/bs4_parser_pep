@@ -6,20 +6,19 @@ import requests_cache
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-from constants import BASE_DIR, MAIN_DOC_URL, PEP_DOC_URL, EXPECTED_STATUS
+from constants import (
+    BASE_DIR, MAIN_DOC_URL, PEP_DOC_URL, EXPECTED_STATUS, DOWNLOADS_FILE
+    )
 from configs import configure_argument_parser, configure_logging
-from utils import get_response, find_tag
+from exceptions import NoVersionsFoundError
+from utils import get_response, find_tag, get_soup
 from outputs import control_output
 
 
 def whats_new(session):
     whats_new_url = urljoin(MAIN_DOC_URL, 'whatsnew/')
-    response = get_response(session, whats_new_url)
-    if response is None:
-        return
-    soup = BeautifulSoup(response.text, features='lxml')
-    main_div = find_tag(soup, 'section', attrs={'id': 'what-s-new-in-python'})
-    div_with_ul = find_tag(main_div, 'div', attrs={'class': 'toctree-wrapper'})
+    soup = get_soup(session, whats_new_url)
+    div_with_ul = find_tag(soup, 'div', attrs={'class': 'toctree-wrapper'})
     sections_by_python = div_with_ul.find_all(
         'li', attrs={'class': 'toctree-l1'}
     )
@@ -43,11 +42,7 @@ def whats_new(session):
 
 
 def latest_versions(session):
-    response = get_response(session, MAIN_DOC_URL)
-    if response is None:
-        return
-    soup = BeautifulSoup(response.text, 'lxml')
-
+    soup = get_soup(session, MAIN_DOC_URL)
     sidebar = find_tag(soup, 'div', {'class': 'sphinxsidebarwrapper'})
     ul_tags = sidebar.find_all('ul')
     for ul in ul_tags:
@@ -55,7 +50,7 @@ def latest_versions(session):
             a_tags = ul.find_all('a')
             break
     else:
-        raise Exception('Ничего не нашлось')
+        raise NoVersionsFoundError('Ничего не нашлось')
     results = [('Ссылка на документацию', 'Версия', 'Статус')]
     pattern = r'Python (?P<version>\d\.\d+) \((?P<status>.*)\)'
     for a_tag in a_tags:
@@ -74,18 +69,14 @@ def latest_versions(session):
 
 def download(session):
     downloads_url = urljoin(MAIN_DOC_URL, 'download.html')
-    response = get_response(session, downloads_url)
-    if response is None:
-        return
-    soup = BeautifulSoup(response.text, 'lxml')
-    main_tag = find_tag(soup, 'div', {'role': 'main'})
-    table_tag = find_tag(main_tag, 'table', {'class': 'docutils'})
+    soup = get_soup(session, downloads_url)
+    table_tag = find_tag(soup, 'table', {'class': 'docutils'})
     pdf_a4_tag = find_tag(
         table_tag, 'a', {'href': re.compile(r'.+pdf-a4\.zip$')})
     pdf_a4_link = pdf_a4_tag['href']
     archive_url = urljoin(downloads_url, pdf_a4_link)
     filename = archive_url.split('/')[-1]
-    downloads_dir = BASE_DIR / 'downloads'
+    downloads_dir = BASE_DIR / DOWNLOADS_FILE
     downloads_dir.mkdir(exist_ok=True)
     archive_path = downloads_dir / filename
     response = session.get(archive_url)
@@ -96,10 +87,7 @@ def download(session):
 
 
 def pep(session):
-    response = get_response(session, PEP_DOC_URL)
-    if response is None:
-        return
-    soup = BeautifulSoup(response.text, 'lxml')
+    soup = get_soup(session, PEP_DOC_URL)
     numerical_match = find_tag(
         soup,
         'section',
@@ -114,7 +102,7 @@ def pep(session):
     )
     sum_pep = 0
     sum_pep_status = {}
-    result = [('Статус', 'Количество')]
+    result = [('Status', 'Quantity')]
     for _pep in tqdm(tr_match):
         sum_pep += 1
 
@@ -130,8 +118,7 @@ def pep(session):
             attrs={'class': 'pep reference internal'}
         )['href']
         pep_link = urljoin(PEP_DOC_URL, href_match)
-        response = get_response(session, pep_link)
-        pep_soup = BeautifulSoup(response.text, 'lxml')
+        pep_soup = get_soup(session, pep_link)
         pep_summary = find_tag(
             pep_soup,
             'dl',
@@ -143,11 +130,8 @@ def pep(session):
             'dd'
         ).string
 
-        if pep_status in sum_pep_status:
-            sum_pep_status[pep_status] += 1
-        else:
-            sum_pep_status[pep_status] = 1
-
+        sum_pep_status.setdefault(pep_status, 0)
+        sum_pep_status[pep_status] += 1
         if pep_status not in EXPECTED_STATUS[preview_status]:
             message = (
                 f'Несовпадающие статусы:'
