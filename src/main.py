@@ -44,12 +44,8 @@ def whats_new(session):
 def latest_versions(session):
     soup = get_soup(session, MAIN_DOC_URL)
     sidebar = find_tag(soup, 'div', {'class': 'sphinxsidebarwrapper'})
-    ul_tags = sidebar.find_all('ul')
-    for ul in ul_tags:
-        if 'All versions' in ul.text:
-            a_tags = ul.find_all('a')
-            break
-    else:
+    a_tags = sidebar.select('ul:contains("All versions") a')
+    if not a_tags:
         raise NoVersionsFoundError('Ничего не нашлось')
     results = [('Ссылка на документацию', 'Версия', 'Статус')]
     pattern = r'Python (?P<version>\d\.\d+) \((?P<status>.*)\)'
@@ -63,16 +59,14 @@ def latest_versions(session):
         results.append(
             (link, version, status)
         )
-
     return results
 
 
 def download(session):
     downloads_url = urljoin(MAIN_DOC_URL, 'download.html')
     soup = get_soup(session, downloads_url)
-    table_tag = find_tag(soup, 'table', {'class': 'docutils'})
     pdf_a4_tag = find_tag(
-        table_tag, 'a', {'href': re.compile(r'.+pdf-a4\.zip$')})
+        soup, 'a', {'href': re.compile(r'.+pdf-a4\.zip$')})
     pdf_a4_link = pdf_a4_tag['href']
     archive_url = urljoin(downloads_url, pdf_a4_link)
     filename = archive_url.split('/')[-1]
@@ -88,18 +82,8 @@ def download(session):
 
 def pep(session):
     soup = get_soup(session, PEP_DOC_URL)
-    numerical_match = find_tag(
-        soup,
-        'section',
-        {'id': 'numerical-index'}
-    )
-    table_match = find_tag(
-        numerical_match,
-        'tbody'
-    )
-    tr_match = table_match.find_all(
-        'tr'
-    )
+    table_match = soup.select_one('section#numerical-index tbody')
+    tr_match = table_match.find_all('tr')
     sum_pep = 0
     sum_pep_status = {}
     result = [('Status', 'Quantity')]
@@ -164,7 +148,14 @@ def main():
     if args.clear_cache:
         session.cache.clear()
     parser_mode = args.mode
-    results = MODE_TO_FUNCTION[parser_mode](session)
+    try:
+        results = MODE_TO_FUNCTION[parser_mode](session)
+        if results is not None:
+            control_output(results, args)
+    except Exception as e:
+        logging.exception(
+            f'Ошибка при выполнении парсинга: {e}', stack_info=True
+        )
     if results is not None:
         control_output(results, args)
     logging.info('Парсер завершил работу.')
